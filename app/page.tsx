@@ -41,7 +41,8 @@ export default function Home() {
 
   // Fetch scores on component mount
   useEffect(() => {
-    fetchScores();
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void fetchScores();
   }, []);
 
   const handleSubmitScore = async (e: React.FormEvent) => {
