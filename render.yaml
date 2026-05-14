@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: swe40006-leaderboard
+    runtime: node
+    plan: free
+    buildCommand: npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: leaderboard-db
+          property: connectionString
+
+databases:
+  - name: leaderboard-db
+    databaseName: leaderboard
+    plan: free
+    region: oregon
