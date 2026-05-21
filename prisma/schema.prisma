@@ -12,7 +12,7 @@ datasource db {
 
 model Score {
   id        Int     @id @default(autoincrement())
-  player    String
+  player    String  @default("Anonymous")
   score     Int
   createdAt DateTime @default(now())
 
