@@ -10,12 +10,23 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model User {
+  id        Int     @id @default(autoincrement())
+  name      String  @unique
+  createdAt DateTime @default(now())
+  scores    Score[]  // relationship to scores
+
+  @@index([name])
+}
+
 model Score {
   id        Int     @id @default(autoincrement())
-  player    String
   score     Int
+  userId    Int
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
 
   @@index([score])
   @@index([createdAt])
+  @@index([userId])
 }
