@@ -43,24 +43,17 @@ export async function GET(request) {
 export async function POST(request) {
   try {
     const body = await request.json();
-    const { userId, score } = body;
+    const { player, score } = body;
 
     // Validate input
-    if (!userId || typeof userId !== 'number') {
+    if (!player || score === undefined) {
       return Response.json(
-        { error: 'User ID is required and must be a number' },
+        { error: 'Both player name and score are required' },
         { status: 400 }
       );
     }
 
-    if (score === undefined || typeof score !== 'number') {
-      return Response.json(
-        { error: 'Score is required and must be a number' },
-        { status: 400 }
-      );
-    }
-
-    const newScore = await createScore(userId, score);
+    const newScore = await createScore(player, score);
 
     return Response.json(
       {
