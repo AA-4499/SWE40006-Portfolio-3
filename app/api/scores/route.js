@@ -7,6 +7,8 @@ export async function GET(request) {
   try {
     const url = new URL(request.url);
     const limit = parseInt(url.searchParams.get('limit') || '10', 10);
+    const gradeParam = url.searchParams.get('grade');
+    const grade = gradeParam === null ? undefined : parseInt(gradeParam, 10);
 
     if (limit < 1 || limit > 100) {
       return Response.json(
@@ -15,7 +17,14 @@ export async function GET(request) {
       );
     }
 
-    const scores = await getScores(limit);
+    if (gradeParam !== null && (Number.isNaN(grade) || grade < 0 || grade > 3)) {
+      return Response.json(
+        { error: 'Grade must be between 0 and 3' },
+        { status: 400 }
+      );
+    }
+
+    const scores = await getScores(limit, grade);
     return Response.json({
       success: true,
       data: scores,
@@ -43,7 +52,7 @@ export async function GET(request) {
 export async function POST(request) {
   try {
     const body = await request.json();
-    const { player, score } = body;
+    const { player, score, grade = 0 } = body;
 
     // Validate input
     if (!player || score === undefined) {
@@ -53,7 +62,7 @@ export async function POST(request) {
       );
     }
 
-    const newScore = await createScore(player, score);
+    const newScore = await createScore(player, score, grade);
 
     return Response.json(
       {

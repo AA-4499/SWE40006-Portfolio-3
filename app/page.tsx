@@ -34,6 +34,14 @@ interface WordList {
   words: string[];
 }
 
+interface ScoreEntry {
+  id: number;
+  player: string;
+  score: number;
+  grade: number;
+  rank: number;
+}
+
 type Screen = 'home' | 'custom-list' | 'playing' | 'results';
 type Feedback = 'correct' | 'wrong' | null;
 
@@ -105,6 +113,11 @@ function getGradeMessage(percent: number): string {
   return '💪 Keep going! Practice makes perfect!';
 }
 
+function getGradeLabel(grade: number): string {
+  const list = WORD_LISTS.find((wordList) => wordList.grade === grade);
+  return list ? list.label : 'Custom';
+}
+
 // ============================================================================
 // Sub-Components
 // ============================================================================
@@ -116,53 +129,179 @@ interface HomeScreenProps {
 
 function HomeScreen({ onStart, onOpenCustomList }: HomeScreenProps): JSX.Element {
   const [selectedGrade, setSelectedGrade] = useState(1);
+  const [leaderboards, setLeaderboards] = useState<Record<number, ScoreEntry[]>>({
+    1: [],
+    2: [],
+    3: [],
+  });
+  const [leaderboardError, setLeaderboardError] = useState('');
+  const [isLoadingLeaderboards, setIsLoadingLeaderboards] = useState(true);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadLeaderboards = async (): Promise<void> => {
+      try {
+        setIsLoadingLeaderboards(true);
+        setLeaderboardError('');
+
+        const results = await Promise.all(
+          [1, 2, 3].map(async (grade) => {
+            const response = await fetch(`/api/scores?grade=${grade}&limit=5`);
+            if (!response.ok) {
+              throw new Error(`Failed to load grade ${grade} rankings`);
+            }
+
+            const payload = await response.json();
+            return [grade, (payload.data || []) as ScoreEntry[]] as const;
+          })
+        );
+
+        if (!isMounted) return;
+
+        setLeaderboards(Object.fromEntries(results) as Record<number, ScoreEntry[]>);
+      } catch (error) {
+        console.error('Error loading leaderboards:', error);
+        if (isMounted) {
+          setLeaderboardError('Ranking dashboard is unavailable right now.');
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingLeaderboards(false);
+        }
+      }
+    };
+
+    void loadLeaderboards();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-blue-50 to-blue-100 dark:from-blue-950 dark:to-blue-900 flex flex-col items-center justify-center px-4">
-      <div className="text-center mb-12">
-        <div className="text-6xl mb-4">📚</div>
-        <h1 className="text-5xl font-bold text-blue-900 dark:text-blue-100 mb-2">
-          Spelling Star
-        </h1>
-        <p className="text-xl text-blue-700 dark:text-blue-300">
-          Practice your spelling and become a star!
-        </p>
-      </div>
+    <div className="min-h-screen bg-gradient-to-b from-blue-50 to-blue-100 dark:from-blue-950 dark:to-blue-900 px-4 py-6 lg:px-8">
+      <div className="mx-auto grid w-full max-w-7xl gap-6 lg:grid-cols-[360px_minmax(0,1fr)] lg:items-start">
+        <aside className="bg-white/95 dark:bg-gray-900/95 rounded-3xl shadow-2xl ring-1 ring-blue-100 dark:ring-blue-900 p-5 lg:p-6 sticky top-6 h-fit">
+          <div className="flex items-center gap-3 mb-5">
+            <div className="text-4xl">🏅</div>
+            <div>
+              <h2 className="text-2xl font-bold text-blue-950 dark:text-blue-100">Ranking Dashboard</h2>
+              <p className="text-sm text-blue-700 dark:text-blue-300">Top players by grade</p>
+            </div>
+          </div>
 
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8 max-w-md w-full mb-6">
-        <p className="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-4">
-          Choose your level:
-        </p>
-        <div className="flex flex-col gap-3 mb-8">
-          {WORD_LISTS.map((wl) => (
-            <button
-              key={wl.grade}
-              onClick={() => setSelectedGrade(wl.grade)}
-              className={`py-3 px-4 rounded-lg font-semibold transition-all ${
-                selectedGrade === wl.grade
-                  ? 'bg-blue-600 text-white scale-105 shadow-md'
-                  : 'bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600'
-              }`}
-            >
-              {wl.label}
-            </button>
-          ))}
-        </div>
+          {isLoadingLeaderboards ? (
+            <div className="space-y-4">
+              {[1, 2, 3].map((grade) => (
+                <div key={grade} className="rounded-2xl bg-blue-50 dark:bg-gray-800 p-4 animate-pulse">
+                  <div className="h-5 w-32 rounded bg-blue-200 dark:bg-gray-700 mb-3" />
+                  <div className="space-y-2">
+                    <div className="h-4 w-full rounded bg-blue-100 dark:bg-gray-700" />
+                    <div className="h-4 w-5/6 rounded bg-blue-100 dark:bg-gray-700" />
+                    <div className="h-4 w-2/3 rounded bg-blue-100 dark:bg-gray-700" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : leaderboardError ? (
+            <div className="rounded-2xl bg-red-50 dark:bg-red-950 text-red-700 dark:text-red-200 p-4 text-sm">
+              {leaderboardError}
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {[1, 2, 3].map((grade) => {
+                const entries = leaderboards[grade] || [];
 
-        <div className="flex flex-col gap-3">
-          <button
-            onClick={() => onStart(selectedGrade)}
-            className="w-full py-3 px-4 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg transition-colors text-lg"
-          >
-            ▶ Start Quiz
-          </button>
-          <button
-            onClick={onOpenCustomList}
-            className="w-full py-3 px-4 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-lg transition-colors text-lg"
-          >
-            📝 Create Custom List
-          </button>
-        </div>
+                return (
+                  <section key={grade} className="rounded-2xl bg-blue-50 dark:bg-gray-800 p-4 border border-blue-100 dark:border-gray-700">
+                    <div className="flex items-center justify-between mb-3">
+                      <div>
+                        <h3 className="text-lg font-bold text-blue-950 dark:text-blue-100">
+                          {getGradeLabel(grade)}
+                        </h3>
+                        <p className="text-xs text-blue-700 dark:text-blue-300">Best scores this week</p>
+                      </div>
+                      <span className="rounded-full bg-blue-600 text-white text-xs font-bold px-3 py-1">
+                        Grade {grade}
+                      </span>
+                    </div>
+
+                    {entries.length === 0 ? (
+                      <p className="text-sm text-gray-600 dark:text-gray-300">No scores yet.</p>
+                    ) : (
+                      <ol className="space-y-2">
+                        {entries.map((entry) => (
+                          <li key={entry.id} className="flex items-center justify-between rounded-xl bg-white dark:bg-gray-900 px-3 py-2 shadow-sm">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-600 text-white text-sm font-bold">
+                                {entry.rank}
+                              </span>
+                              <span className="truncate font-semibold text-gray-900 dark:text-gray-100">
+                                {entry.player}
+                              </span>
+                            </div>
+                            <span className="text-sm font-bold text-blue-700 dark:text-blue-300">
+                              {entry.score}/10
+                            </span>
+                          </li>
+                        ))}
+                      </ol>
+                    )}
+                  </section>
+                );
+              })}
+            </div>
+          )}
+        </aside>
+
+        <main className="flex flex-col items-center justify-center py-6 lg:py-10">
+          <div className="text-center mb-10">
+            <div className="text-6xl mb-4">📚</div>
+            <h1 className="text-5xl font-bold text-blue-900 dark:text-blue-100 mb-2">
+              Spelling Star
+            </h1>
+            <p className="text-xl text-blue-700 dark:text-blue-300">
+              Practice your spelling and become a star!
+            </p>
+          </div>
+
+          <div className="bg-white dark:bg-gray-800 rounded-3xl shadow-2xl p-8 max-w-md w-full mb-6 ring-1 ring-blue-100 dark:ring-gray-700">
+            <p className="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-4">
+              Choose your level:
+            </p>
+            <div className="flex flex-col gap-3 mb-8">
+              {WORD_LISTS.map((wl) => (
+                <button
+                  key={wl.grade}
+                  onClick={() => setSelectedGrade(wl.grade)}
+                  className={`py-3 px-4 rounded-lg font-semibold transition-all ${
+                    selectedGrade === wl.grade
+                      ? 'bg-blue-600 text-white scale-105 shadow-md'
+                      : 'bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600'
+                  }`}
+                >
+                  {wl.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex flex-col gap-3">
+              <button
+                onClick={() => onStart(selectedGrade)}
+                className="w-full py-3 px-4 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg transition-colors text-lg"
+              >
+                ▶ Start Quiz
+              </button>
+              <button
+                onClick={onOpenCustomList}
+                className="w-full py-3 px-4 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-lg transition-colors text-lg"
+              >
+                📝 Create Custom List
+              </button>
+            </div>
+          </div>
+        </main>
       </div>
     </div>
   );
@@ -374,10 +513,11 @@ function QuizScreen({ words, onComplete }: QuizScreenProps): JSX.Element {
 interface ResultsScreenProps {
   score: number;
   totalWords: number;
+  grade: number;
   onRestart: () => void;
 }
 
-function ResultsScreen({ score, totalWords, onRestart }: ResultsScreenProps): JSX.Element {
+function ResultsScreen({ score, totalWords, grade, onRestart }: ResultsScreenProps): JSX.Element {
   const [username, setUsername] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -408,6 +548,7 @@ function ResultsScreen({ score, totalWords, onRestart }: ResultsScreenProps): JS
         body: JSON.stringify({
           player: username.trim(),
           score: score,
+          grade,
         }),
       });
 
@@ -479,7 +620,7 @@ function ResultsScreen({ score, totalWords, onRestart }: ResultsScreenProps): JS
         {/* Save Score Section */}
         <div className="mb-6 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
           <p className="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-3">
-            💾 Save Your Score
+            💾 Save Your Score - {getGradeLabel(grade)}
           </p>
           <input
             type="text"
@@ -536,12 +677,14 @@ export default function SpellingStarApp(): JSX.Element {
   const [screen, setScreen] = useState<Screen>('home');
   const [words, setWords] = useState<string[]>([]);
   const [finalScore, setFinalScore] = useState(0);
+  const [currentGrade, setCurrentGrade] = useState(0);
 
   const handleStartGame = (selectedGrade: number): void => {
     const list = WORD_LISTS.find((wl) => wl.grade === selectedGrade);
     if (!list) return;
     const picked = shuffle(list.words).slice(0, ROUNDS);
     setWords(picked);
+    setCurrentGrade(selectedGrade);
     setScreen('playing');
   };
 
@@ -552,6 +695,7 @@ export default function SpellingStarApp(): JSX.Element {
   const handleStartCustomGame = (customWords: string[]): void => {
     const picked = shuffle(customWords).slice(0, ROUNDS);
     setWords(picked);
+    setCurrentGrade(0);
     setScreen('playing');
   };
 
@@ -568,6 +712,7 @@ export default function SpellingStarApp(): JSX.Element {
     setScreen('home');
     setWords([]);
     setFinalScore(0);
+    setCurrentGrade(0);
   };
 
   if (screen === 'home') {
@@ -597,6 +742,7 @@ export default function SpellingStarApp(): JSX.Element {
       <ResultsScreen
         score={finalScore}
         totalWords={words.length}
+        grade={currentGrade}
         onRestart={handleRestart}
       />
     );
