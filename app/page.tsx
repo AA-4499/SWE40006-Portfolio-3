@@ -1,233 +1,525 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+/**
+ * Spelling Star Game Component
+ *
+ * A complete spelling-practice game for primary school children with 4 screens:
+ * - Home: Grade selection (Easy/Medium/Harder) with Start Quiz and Custom List options
+ * - Custom List: User-defined word list with minimum 3-word validation
+ * - Quiz: 10-word interactive quiz with speech synthesis, input validation, and feedback
+ * - Results: Score display with pie chart visualization (using recharts)
+ *
+ * All game state managed via React useState — no localStorage or database writes.
+ * Uses Web Speech API for word playback (rate 0.85, pitch 1.0, 400ms delay).
+ * Styled entirely with Tailwind CSS v4 utilities.
+ */
 
-interface ScoreEntry {
-  id: number;
-  player: string;
-  score: number;
-  rank: number;
-  createdAt: string;
+import { useState, useEffect, useRef, useMemo, KeyboardEvent, JSX } from 'react';
+import {
+  PieChart,
+  Pie,
+  Cell,
+  Legend,
+  ResponsiveContainer,
+  Tooltip as RechartsTooltip,
+} from 'recharts';
+
+// ============================================================================
+// Constants & Types
+// ============================================================================
+
+interface WordList {
+  grade: number;
+  label: string;
+  words: string[];
 }
 
-export default function Home() {
-  const [scores, setScores] = useState<ScoreEntry[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  const [playerName, setPlayerName] = useState('');
-  const [playerScore, setPlayerScore] = useState('');
-  const [submitMessage, setSubmitMessage] = useState<string | null>(null);
+type Screen = 'home' | 'custom-list' | 'playing' | 'results';
+type Feedback = 'correct' | 'wrong' | null;
 
-  const fetchScores = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const response = await fetch('/api/scores?limit=10');
-      
-      if (!response.ok) {
-        throw new Error('Failed to fetch scores');
-      }
+const WORD_LISTS: WordList[] = [
+  {
+    grade: 1,
+    label: 'Grade 1 – Easy',
+    words: [
+      'cat', 'dog', 'hat', 'run', 'big', 'red', 'sun', 'map', 'box', 'cup',
+      'bed', 'sit', 'hop', 'fan', 'leg', 'win', 'net', 'bug', 'top', 'kit',
+    ],
+  },
+  {
+    grade: 2,
+    label: 'Grade 2 – Medium',
+    words: [
+      'apple', 'bread', 'chair', 'drink', 'every', 'floor', 'green', 'house',
+      'juice', 'knife', 'light', 'mouse', 'night', 'ocean', 'plant', 'queen',
+      'river', 'storm', 'tiger', 'uncle',
+    ],
+  },
+  {
+    grade: 3,
+    label: 'Grade 3 – Harder',
+    words: [
+      'animal', 'butter', 'castle', 'dinner', 'engine', 'finger', 'garden',
+      'hammer', 'island', 'jungle', 'kitten', 'ladder', 'magnet', 'napkin',
+      'oyster', 'pillow', 'rabbit', 'silver', 'tunnel', 'velvet',
+    ],
+  },
+];
 
-      const data = await response.json();
-      setScores(data.data || []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred');
-      setScores([]);
-    } finally {
-      setLoading(false);
-    }
-  };
+const ROUNDS = 10;
 
-  // Fetch scores on component mount
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void fetchScores();
-  }, []);
+// ============================================================================
+// Utility Functions
+// ============================================================================
 
-  const handleSubmitScore = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSubmitMessage(null);
+function shuffle<T>(arr: T[]): T[] {
+  const shuffled = [...arr];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled;
+}
 
-    if (!playerName.trim() || !playerScore.trim()) {
-      setSubmitMessage('Please fill in both fields');
-      return;
-    }
+function parseWords(rawInput: string): string[] {
+  return rawInput
+    .split(/[\n,]+/)
+    .map((word) => word.trim().toLowerCase())
+    .filter((word) => word.length > 0)
+    .filter((word, index, allWords) => allWords.indexOf(word) === index);
+}
 
-    const scoreNum = parseInt(playerScore, 10);
-    if (isNaN(scoreNum) || scoreNum < 0) {
-      setSubmitMessage('Score must be a valid non-negative number');
-      return;
-    }
+function speakWord(word: string): void {
+  if (typeof window === 'undefined') return;
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(word);
+  utterance.rate = 0.85;
+  utterance.pitch = 1.0;
+  window.speechSynthesis.speak(utterance);
+}
 
-    try {
-      setSubmitting(true);
-      const response = await fetch('/api/scores', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          player: playerName.trim(),
-          score: scoreNum,
-        }),
-      });
+function getGradeMessage(percent: number): string {
+  if (percent === 100) return "🏆 Perfect score! You're a spelling champion!";
+  if (percent >= 80) return '🌟 Amazing work! Almost perfect!';
+  if (percent >= 60) return '👍 Good effort! Keep practising!';
+  return '💪 Keep going! Practice makes perfect!';
+}
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to submit score');
-      }
+// ============================================================================
+// Sub-Components
+// ============================================================================
 
-      setSubmitMessage('Score submitted successfully!');
-      setPlayerName('');
-      setPlayerScore('');
-      
-      // Refresh scores
-      await fetchScores();
-    } catch (err) {
-      setSubmitMessage(err instanceof Error ? err.message : 'Failed to submit score');
-    } finally {
-      setSubmitting(false);
-    }
-  };
+interface HomeScreenProps {
+  onStart: (grade: number) => void;
+  onOpenCustomList: () => void;
+}
+
+function HomeScreen({ onStart, onOpenCustomList }: HomeScreenProps): JSX.Element {
+  const [selectedGrade, setSelectedGrade] = useState(1);
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100 dark:from-gray-900 dark:to-black py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-4xl mx-auto">
-        {/* Header */}
-        <div className="text-center mb-12">
-          <h1 className="text-4xl font-bold text-gray-900 dark:text-white mb-2">
-            🏆 Leaderboard
-          </h1>
-          <p className="text-lg text-gray-600 dark:text-gray-400">
-            Submit your score and compete with others
-          </p>
+    <div className="min-h-screen bg-gradient-to-b from-blue-50 to-blue-100 dark:from-blue-950 dark:to-blue-900 flex flex-col items-center justify-center px-4">
+      <div className="text-center mb-12">
+        <div className="text-6xl mb-4">📚</div>
+        <h1 className="text-5xl font-bold text-blue-900 dark:text-blue-100 mb-2">
+          Spelling Star
+        </h1>
+        <p className="text-xl text-blue-700 dark:text-blue-300">
+          Practice your spelling and become a star!
+        </p>
+      </div>
+
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8 max-w-md w-full mb-6">
+        <p className="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-4">
+          Choose your level:
+        </p>
+        <div className="flex flex-col gap-3 mb-8">
+          {WORD_LISTS.map((wl) => (
+            <button
+              key={wl.grade}
+              onClick={() => setSelectedGrade(wl.grade)}
+              className={`py-3 px-4 rounded-lg font-semibold transition-all ${
+                selectedGrade === wl.grade
+                  ? 'bg-blue-600 text-white scale-105 shadow-md'
+                  : 'bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600'
+              }`}
+            >
+              {wl.label}
+            </button>
+          ))}
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-          {/* Submit Score Form */}
-          <div className="md:col-span-1">
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6">
-              <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-4">
-                Submit Score
-              </h2>
-              
-              <form onSubmit={handleSubmitScore} className="space-y-4">
-                <div>
-                  <label htmlFor="playerName" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Player Name
-                  </label>
-                  <input
-                    type="text"
-                    id="playerName"
-                    value={playerName}
-                    onChange={(e) => setPlayerName(e.target.value)}
-                    placeholder="Enter your name"
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    disabled={submitting}
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="playerScore" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Score
-                  </label>
-                  <input
-                    type="number"
-                    id="playerScore"
-                    value={playerScore}
-                    onChange={(e) => setPlayerScore(e.target.value)}
-                    placeholder="Enter score"
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    disabled={submitting}
-                    min="0"
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={submitting}
-                  className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-medium py-2 px-4 rounded-md transition-colors"
-                >
-                  {submitting ? 'Submitting...' : 'Submit Score'}
-                </button>
-
-                {submitMessage && (
-                  <div className={`p-3 rounded text-sm ${
-                    submitMessage.includes('successfully') 
-                      ? 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200'
-                      : 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200'
-                  }`}>
-                    {submitMessage}
-                  </div>
-                )}
-              </form>
-            </div>
-          </div>
-
-          {/* Leaderboard */}
-          <div className="md:col-span-2">
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6">
-              <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-4">
-                Top Scores
-              </h2>
-
-              {loading ? (
-                <div className="text-center py-8">
-                  <p className="text-gray-600 dark:text-gray-400">Loading scores...</p>
-                </div>
-              ) : error ? (
-                <div className="bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200 p-4 rounded">
-                  Error: {error}
-                </div>
-              ) : scores.length === 0 ? (
-                <div className="text-center py-8">
-                  <p className="text-gray-600 dark:text-gray-400">
-                    No scores yet. Be the first to submit!
-                  </p>
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left">
-                    <thead>
-                      <tr className="border-b border-gray-200 dark:border-gray-700">
-                        <th className="pb-3 font-semibold text-gray-900 dark:text-white">Rank</th>
-                        <th className="pb-3 font-semibold text-gray-900 dark:text-white">Player</th>
-                        <th className="pb-3 font-semibold text-gray-900 dark:text-white">Score</th>
-                        <th className="pb-3 font-semibold text-gray-900 dark:text-white">Date</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {scores.map((entry) => (
-                        <tr
-                          key={entry.id}
-                          className="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-                        >
-                          <td className="py-3 text-gray-900 dark:text-white">
-                            <span className="inline-flex items-center justify-center w-6 h-6 bg-blue-600 text-white rounded-full text-sm font-bold">
-                              {entry.rank}
-                            </span>
-                          </td>
-                          <td className="py-3 text-gray-900 dark:text-white">{entry.player}</td>
-                          <td className="py-3 font-semibold text-gray-900 dark:text-white">{entry.score}</td>
-                          <td className="py-3 text-gray-600 dark:text-gray-400 text-sm">
-                            {new Date(entry.createdAt).toLocaleDateString()}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-
-            {/* Health Status */}
-            <div className="mt-6 bg-green-50 dark:bg-green-900 border border-green-200 dark:border-green-700 rounded-lg p-4">
-              <p className="text-sm text-green-800 dark:text-green-200">
-                ✓ Database connection: <span className="font-semibold">Active</span>
-              </p>
-            </div>
-          </div>
+        <div className="flex flex-col gap-3">
+          <button
+            onClick={() => onStart(selectedGrade)}
+            className="w-full py-3 px-4 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg transition-colors text-lg"
+          >
+            ▶ Start Quiz
+          </button>
+          <button
+            onClick={onOpenCustomList}
+            className="w-full py-3 px-4 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-lg transition-colors text-lg"
+          >
+            📝 Create Custom List
+          </button>
         </div>
       </div>
     </div>
   );
+}
+
+interface CustomListScreenProps {
+  onBack: () => void;
+  onStart: (words: string[]) => void;
+}
+
+function CustomListScreen({ onBack, onStart }: CustomListScreenProps): JSX.Element {
+  const [rawInput, setRawInput] = useState('');
+
+  const parsedWords = useMemo(() => parseWords(rawInput), [rawInput]);
+  const canStart = parsedWords.length >= 3;
+
+  const handleStart = (): void => {
+    if (canStart) {
+      onStart(parsedWords);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-purple-50 to-purple-100 dark:from-purple-950 dark:to-purple-900 flex flex-col items-center justify-center px-4">
+      <div className="text-center mb-8">
+        <div className="text-6xl mb-4">📝</div>
+        <h1 className="text-5xl font-bold text-purple-900 dark:text-purple-100 mb-2">
+          Create Custom List
+        </h1>
+        <p className="text-lg text-purple-700 dark:text-purple-300">
+          Add at least 3 words. Use commas or new lines.
+        </p>
+      </div>
+
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8 max-w-2xl w-full mb-6">
+        <textarea
+          value={rawInput}
+          onChange={(e) => setRawInput(e.target.value)}
+          placeholder="Example: apple, banana, cherry"
+          className="w-full h-48 p-4 border-2 border-gray-300 dark:border-gray-600 rounded-lg resize-none focus:outline-none focus:border-purple-500 dark:bg-gray-700 dark:text-gray-100 dark:placeholder-gray-400"
+        />
+
+        <p className="mt-4 text-lg font-semibold text-gray-700 dark:text-gray-300">
+          {canStart
+            ? `✓ ${parsedWords.length} words ready`
+            : `Add ${3 - parsedWords.length} more word${3 - parsedWords.length === 1 ? '' : 's'}`}
+        </p>
+      </div>
+
+      <div className="flex gap-3 max-w-2xl w-full">
+        <button
+          onClick={onBack}
+          className="flex-1 py-3 px-4 bg-gray-500 hover:bg-gray-600 text-white font-bold rounded-lg transition-colors"
+        >
+          ← Back to Home
+        </button>
+        <button
+          onClick={handleStart}
+          disabled={!canStart}
+          className={`flex-1 py-3 px-4 font-bold rounded-lg transition-colors text-white ${
+            canStart
+              ? 'bg-green-600 hover:bg-green-700 cursor-pointer'
+              : 'bg-gray-400 cursor-not-allowed'
+          }`}
+        >
+          ▶ Start Custom Quiz
+        </button>
+      </div>
+    </div>
+  );
+}
+
+interface QuizScreenProps {
+  words: string[];
+  onComplete: (score: number) => void;
+}
+
+function QuizScreen({ words, onComplete }: QuizScreenProps): JSX.Element {
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [input, setInput] = useState('');
+  const [feedback, setFeedback] = useState<Feedback>(null);
+  const [score, setScore] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Auto-speak on word change
+  useEffect(() => {
+    if (words.length > 0 && feedback === null) {
+      const timeout = setTimeout(() => {
+        speakWord(words[currentIndex]);
+      }, 400);
+      inputRef.current?.focus();
+      return () => clearTimeout(timeout);
+    }
+  }, [currentIndex, feedback, words]);
+
+  const submitAnswer = (): void => {
+    if (!input.trim() || feedback !== null) return;
+    const correct = input.trim().toLowerCase() === words[currentIndex].toLowerCase();
+    setFeedback(correct ? 'correct' : 'wrong');
+    if (correct) {
+      setScore((prev) => prev + 1);
+    }
+  };
+
+  const nextWord = (): void => {
+    if (currentIndex + 1 >= words.length) {
+      onComplete(score);
+    } else {
+      setCurrentIndex((prev) => prev + 1);
+      setInput('');
+      setFeedback(null);
+    }
+  };
+
+  const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>): void => {
+    if (e.key === 'Enter') {
+      if (feedback === null) {
+        submitAnswer();
+      } else {
+        nextWord();
+      }
+    }
+  };
+
+  const isLast = currentIndex + 1 >= words.length;
+  const progressPercent = ((currentIndex + 1) / words.length) * 100;
+
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-green-50 to-green-100 dark:from-green-950 dark:to-green-900 flex flex-col items-center justify-center px-4 py-8">
+      {/* Progress Bar */}
+      <div className="w-full max-w-2xl mb-8">
+        <div className="h-3 bg-gray-300 dark:bg-gray-700 rounded-full overflow-hidden">
+          <div
+            className="h-full bg-green-600 transition-all duration-300"
+            style={{ width: `${progressPercent}%` }}
+          />
+        </div>
+      </div>
+
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8 max-w-2xl w-full">
+        {/* Word Counter */}
+        <p className="text-sm font-semibold text-gray-600 dark:text-gray-400 text-center mb-6">
+          Word {currentIndex + 1} of {words.length}
+        </p>
+
+        {/* Instruction & Hear Again Button */}
+        <div className="text-center mb-8">
+          <p className="text-lg text-gray-700 dark:text-gray-300 mb-4">
+            Listen carefully and type what you hear
+          </p>
+          <button
+            onClick={() => speakWord(words[currentIndex])}
+            className="py-2 px-6 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition-colors"
+          >
+            🔊 Hear Again
+          </button>
+        </div>
+
+        {/* Input Field */}
+        <input
+          ref={inputRef}
+          type="text"
+          placeholder="Type your answer..."
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={handleKeyDown}
+          disabled={feedback !== null}
+          autoComplete="off"
+          spellCheck="false"
+          className="w-full py-3 px-4 border-2 border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:border-green-500 dark:bg-gray-700 dark:text-gray-100 disabled:bg-gray-100 dark:disabled:bg-gray-600 mb-6 text-lg"
+        />
+
+        {/* Feedback Message */}
+        {feedback && (
+          <div
+            className={`p-4 rounded-lg mb-6 text-center font-bold text-lg ${
+              feedback === 'correct'
+                ? 'bg-green-200 dark:bg-green-900 text-green-800 dark:text-green-100'
+                : 'bg-red-200 dark:bg-red-900 text-red-800 dark:text-red-100'
+            } animate-pulse`}
+          >
+            {feedback === 'correct'
+              ? '✓ Correct!'
+              : `✗ Wrong! It's "${words[currentIndex]}"`}
+          </div>
+        )}
+
+        {/* Submit / Next Button */}
+        {feedback === null ? (
+          <button
+            onClick={submitAnswer}
+            className="w-full py-3 px-4 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg transition-colors text-lg"
+          >
+            Submit
+          </button>
+        ) : (
+          <button
+            onClick={nextWord}
+            className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition-colors text-lg"
+          >
+            {isLast ? 'See Results' : 'Next Word'}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+interface ResultsScreenProps {
+  score: number;
+  totalWords: number;
+  onRestart: () => void;
+}
+
+function ResultsScreen({ score, totalWords, onRestart }: ResultsScreenProps): JSX.Element {
+  const percent = Math.round((score / totalWords) * 100);
+  const incorrect = totalWords - score;
+
+  const chartData = [
+    { name: 'Correct', value: score, fill: '#4ade80' },
+    { name: 'Incorrect', value: incorrect, fill: '#ef4444' },
+  ];
+
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-yellow-50 to-yellow-100 dark:from-yellow-950 dark:to-yellow-900 flex flex-col items-center justify-center px-4 py-8">
+      <div className="text-center mb-8">
+        <div className="text-7xl mb-4">🎉</div>
+        <h1 className="text-5xl font-bold text-yellow-900 dark:text-yellow-100 mb-2">
+          Quiz Complete!
+        </h1>
+      </div>
+
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8 max-w-2xl w-full mb-8">
+        {/* Score Circle */}
+        <div className="flex flex-col items-center mb-8">
+          <div className="w-40 h-40 rounded-full bg-gradient-to-br from-yellow-400 to-yellow-600 flex flex-col items-center justify-center shadow-lg">
+            <span className="text-5xl font-bold text-white">
+              {score}/{totalWords}
+            </span>
+            <span className="text-2xl font-bold text-white">{percent}%</span>
+          </div>
+        </div>
+
+        {/* Grade Message */}
+        <p className="text-2xl font-semibold text-center text-gray-800 dark:text-gray-200 mb-8">
+          {getGradeMessage(percent)}
+        </p>
+
+        {/* Pie Chart */}
+        <div className="w-full h-80 mb-8">
+          <ResponsiveContainer width="100%" height="100%">
+            <PieChart>
+              <Pie
+                data={chartData}
+                cx="50%"
+                cy="50%"
+                labelLine={false}
+                label={({ name, value }) => `${name}: ${value}`}
+                outerRadius={100}
+                fill="#8884d8"
+                dataKey="value"
+              >
+                {chartData.map((entry, index) => (
+                  <Cell key={`cell-${index}`} fill={entry.fill} />
+                ))}
+              </Pie>
+              <RechartsTooltip />
+              <Legend />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* Try Again Button */}
+        <button
+          onClick={onRestart}
+          className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition-colors text-lg"
+        >
+          ↻ Try Again
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// Main App Component
+// ============================================================================
+
+export default function SpellingStarApp(): JSX.Element {
+  const [screen, setScreen] = useState<Screen>('home');
+  const [words, setWords] = useState<string[]>([]);
+  const [finalScore, setFinalScore] = useState(0);
+
+  const handleStartGame = (selectedGrade: number): void => {
+    const list = WORD_LISTS.find((wl) => wl.grade === selectedGrade);
+    if (!list) return;
+    const picked = shuffle(list.words).slice(0, ROUNDS);
+    setWords(picked);
+    setScreen('playing');
+  };
+
+  const handleOpenCustomList = (): void => {
+    setScreen('custom-list');
+  };
+
+  const handleStartCustomGame = (customWords: string[]): void => {
+    const picked = shuffle(customWords).slice(0, ROUNDS);
+    setWords(picked);
+    setScreen('playing');
+  };
+
+  const handleBackToHome = (): void => {
+    setScreen('home');
+  };
+
+  const handleQuizComplete = (score: number): void => {
+    setFinalScore(score);
+    setScreen('results');
+  };
+
+  const handleRestart = (): void => {
+    setScreen('home');
+    setWords([]);
+    setFinalScore(0);
+  };
+
+  if (screen === 'home') {
+    return (
+      <HomeScreen
+        onStart={handleStartGame}
+        onOpenCustomList={handleOpenCustomList}
+      />
+    );
+  }
+
+  if (screen === 'custom-list') {
+    return (
+      <CustomListScreen
+        onBack={handleBackToHome}
+        onStart={handleStartCustomGame}
+      />
+    );
+  }
+
+  if (screen === 'playing') {
+    return <QuizScreen words={words} onComplete={handleQuizComplete} />;
+  }
+
+  if (screen === 'results') {
+    return (
+      <ResultsScreen
+        score={finalScore}
+        totalWords={words.length}
+        onRestart={handleRestart}
+      />
+    );
+  }
+
+  return <HomeScreen onStart={handleStartGame} onOpenCustomList={handleOpenCustomList} />;
 }
